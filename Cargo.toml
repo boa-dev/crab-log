@@ -1,0 +1,13 @@
+[package]
+name = "crab-log"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+octocrab = "0.15"
+serde_json = "1.0"
+tokio = { version = "1.17", features = ["full"] }
+futures = "0.3"
+chrono = "0.4"
