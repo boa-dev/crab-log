@@ -320,21 +320,21 @@ async fn main() -> Result<(), ()> {
     eprintln!("ignored:      {:3}", ignored.len());
 
     println!("### Feature Enhancements");
-    println!("");
+    println!();
     for feat in features.into_sorted_vec().iter() {
         println!("- {}", feat.commit);
     }
-    println!("");
+    println!();
 
     println!("### Bug Fixes");
-    println!("");
+    println!();
     for fix in fixes.into_sorted_vec().iter() {
         println!("- {}", fix.commit);
     }
-    println!("");
+    println!();
 
     println!("### Internal Improvements");
-    println!("");
+    println!();
     for improvement in improvements.into_sorted_vec().iter() {
         println!("- {}", improvement.commit);
     }
