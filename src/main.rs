@@ -70,7 +70,7 @@ impl TryFrom<&Value> for Commit {
             .ok_or(())?
             .to_string();
         // we get just the first line
-        let mut first_line = node
+        let first_line = node
             .get("message")
             .and_then(Value::as_str)
             .ok_or(())?
@@ -81,8 +81,7 @@ impl TryFrom<&Value> for Commit {
         let pr_number = get_pr_number(&first_line)?;
         let message = {
             let idx = first_line.find(" (#").ok_or(())?;
-            first_line.truncate(idx);
-            first_line
+            first_line[..idx].trim().to_string()
         };
         let date: DateTime<_> = node
             .get("authoredDate")
