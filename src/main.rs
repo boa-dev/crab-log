@@ -161,7 +161,9 @@ async fn get_commits(date_last_release: &str, crab: &Octocrab) -> Result<Vec<Com
             .and_then(Value::as_str)
             .map(chrono::DateTime::parse_from_rfc3339)
             .and_then(Result::ok)
-            .ok_or(())?;
+            .ok_or(())?
+            .checked_sub_signed(Duration::seconds(1))
+            .expect("can't undeflow by subtracting 1 second from a commit's date");
         let res = vec
             .iter()
             // We ignore commits if we can't find the PR number
@@ -183,9 +185,7 @@ async fn get_commits(date_last_release: &str, crab: &Octocrab) -> Result<Vec<Com
                     break;
                 }
                 ret.extend(new_100);
-                until_date = new_until
-                    .checked_sub_signed(Duration::seconds(1))
-                    .expect("can't undeflow by subtracting 1 second from a commit's date");
+                until_date = new_until;
             }
             Err(_) => break,
         }
