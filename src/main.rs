@@ -57,7 +57,7 @@ impl TryFrom<&Value> for Commit {
             // TODO: this can probably be improved
             let right_of_parens = message.split_once(" (#").ok_or(())?.1;
             let pr_number_str = right_of_parens.split_once(')').ok_or(())?.0.to_string();
-            debug_assert!(pr_number_str.chars().all(|c| c.is_digit(10)));
+            debug_assert!(pr_number_str.chars().all(|c| c.is_ascii_digit()));
             Ok(pr_number_str)
         }
 
@@ -277,7 +277,7 @@ async fn main() -> Result<(), ()> {
         .build()
         .expect("TODO, die gracefuly");
 
-    let date_last_release = "2021-09-30T00:00:00"; // TODO: should get date of last release magically
+    let date_last_release = "2022-06-11T00:00:00"; // TODO: should get date of last release magically
     eprintln!("Fetching all commits since last release");
     let commits = get_commits(date_last_release, &crab).await?;
     eprintln!("commits:      {:3}", commits.len());
