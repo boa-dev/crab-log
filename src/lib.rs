@@ -1,34 +1,25 @@
-use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use std::fmt::Display;
 
 use chrono::{DateTime, Duration, FixedOffset, Utc};
-use futures::stream::FuturesUnordered;
-use futures::stream::StreamExt;
-use octocrab::{Octocrab, OctocrabBuilder};
+use clap::Parser;
+use octocrab::Octocrab;
 use serde_json::Value;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PRKind {
-    Feature,
-    BugFix,
-    Internal,
-    Ignored,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Commit {
-    author: String,
-    message: String,
-    pr_number: String,
-    date: DateTime<FixedOffset>,
+pub struct Commit<'c> {
+    pub config: &'c Config,
+    pub author: String,
+    pub message: String,
+    pub pr_number: String,
+    pub date: DateTime<FixedOffset>,
 }
 
-impl Display for Commit {
+impl<'c> Display for Commit<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let host = "https://github.com";
-        let owner = "boa-dev";
-        let repo = "boa";
+        let owner = &self.config.owner;
+        let repo = &self.config.repo;
         write!(
             f,
             "{} by @{} in [#{}]({}/{}/{}/pull/{})",
@@ -37,22 +28,30 @@ impl Display for Commit {
     }
 }
 
-impl Ord for Commit {
+impl Ord for Commit<'_> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.date.cmp(&other.date)
     }
 }
 
-impl PartialOrd for Commit {
+impl PartialOrd for Commit<'_> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl TryFrom<&Value> for Commit {
-    type Error = ();
+#[derive(Parser, Debug, PartialEq, Eq)]
+#[command(author, version, about, long_about = None)]
+pub struct Config {
+    #[arg(short, long)]
+    owner: String,
 
-    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+    #[arg(short, long)]
+    repo: String,
+}
+
+impl Config {
+    pub fn build_commit(&self, value: &Value) -> Result<Commit, ()> {
         fn get_pr_number(message: &str) -> Result<String, ()> {
             // TODO: this can probably be improved
             let right_of_parens = message.split_once(" (#").ok_or(())?.1;
@@ -90,6 +89,7 @@ impl TryFrom<&Value> for Commit {
             .and_then(Result::ok)
             .ok_or(())?;
         Ok(Commit {
+            config: self,
             author,
             message,
             pr_number,
@@ -98,46 +98,60 @@ impl TryFrom<&Value> for Commit {
     }
 }
 
-async fn get_commits(date_last_release: &str, crab: &Octocrab) -> Result<Vec<Commit>, ()> {
-    async fn get_100_commits(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PRKind {
+    Feature,
+    BugFix,
+    Internal,
+    Ignored,
+}
+
+pub async fn get_commits<'c>(
+    config: &'c Config,
+    date_last_release: &str,
+    crab: &Octocrab,
+) -> Result<Vec<Commit<'c>>, ()> {
+    async fn get_100_commits<'c>(
+        config: &'c Config,
         date_last_release: &str,
         until_date: DateTime<FixedOffset>,
         crab: &Octocrab,
-    ) -> Result<(Vec<Commit>, DateTime<FixedOffset>), ()> {
-        let query = String::from(
+    ) -> Result<(Vec<Commit<'c>>, DateTime<FixedOffset>), ()> {
+        let owner = &config.owner;
+        let repo = &config.repo;
+        let until_date = &until_date.to_rfc3339();
+        let query = format!(
             r#"
-    query {
-      repository(owner:"boa-dev", name:"boa") {
-        refs(refPrefix:"refs/heads/", query:"main", last:1) {
-          edges {
-            node {
-              target {
-                ... on Commit {
-                  history(since:"$date_last_release", until: "$until_date") {
-                    edges {
-                      node {
-                        author {
-                          user {
+    query {{
+      repository(owner:"{owner}", name:"{repo}") {{
+        refs(refPrefix:"refs/heads/", query:"main", last:1) {{
+          edges {{
+            node {{
+              target {{
+                ... on Commit {{
+                  history(since:"{date_last_release}", until: "{until_date}") {{
+                    edges {{
+                      node {{
+                        author {{
+                          user {{
                             login
-                          }
-                        }
+                          }}
+                        }}
                         message
                         authoredDate
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
+                      }}
+                    }}
+                  }}
+                }}
+              }}
+            }}
+          }}
+        }}
+      }}
+    }}
             "#,
-        )
-        .replace("$date_last_release", date_last_release)
-        .replace("$until_date", &until_date.to_rfc3339());
-        let response_object: serde_json::Value = crab
+        );
+        let response_object: Value = crab
             .graphql(&query)
             .await
             .expect("TODO, should handle this");
@@ -167,7 +181,7 @@ async fn get_commits(date_last_release: &str, crab: &Octocrab) -> Result<Vec<Com
         let res = vec
             .iter()
             // We ignore commits if we can't find the PR number
-            .flat_map(|obj| Commit::try_from(obj).ok())
+            .flat_map(|obj| config.build_commit(obj).ok())
             .collect();
         Ok((res, new_date))
     }
@@ -176,9 +190,9 @@ async fn get_commits(date_last_release: &str, crab: &Octocrab) -> Result<Vec<Com
     let now = Utc::now();
     let now = now.with_timezone(&FixedOffset::east(0));
 
-    let (mut ret, mut until_date) = get_100_commits(date_last_release, now, crab).await?;
+    let (mut ret, mut until_date) = get_100_commits(config, date_last_release, now, crab).await?;
     loop {
-        let res = get_100_commits(date_last_release, until_date, crab).await;
+        let res = get_100_commits(config, date_last_release, until_date, crab).await;
         match res {
             Ok((new_100, new_until)) => {
                 if new_100.is_empty() {
@@ -194,47 +208,49 @@ async fn get_commits(date_last_release: &str, crab: &Octocrab) -> Result<Vec<Com
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct PR {
-    commit: Commit,
-    kind: PRKind,
+pub struct PR<'c> {
+    pub commit: Commit<'c>,
+    pub kind: PRKind,
 }
 
-impl Ord for PR {
+impl Ord for PR<'_> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.commit.cmp(&other.commit)
     }
 }
 
-impl PartialOrd for PR {
+impl PartialOrd for PR<'_> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.commit.partial_cmp(&other.commit)
     }
 }
 
-async fn pr_from_commit(commit: Commit, crab: &Octocrab) -> Result<PR, ()> {
+pub async fn pr_from_commit<'c>(commit: Commit<'c>, crab: &Octocrab) -> Result<PR<'c>, ()> {
     // TODO: get mapping from config
     let mapping: HashMap<&str, PRKind> = HashMap::from([
         ("enhancement", PRKind::Feature),
         ("bug", PRKind::BugFix),
         ("Internal", PRKind::Internal),
     ]);
-    let query = String::from(
+    let owner = &commit.config.owner;
+    let repo = &commit.config.repo;
+    let pr_number = &commit.pr_number;
+    let query = format!(
         r#"
-query {
-  repository(owner:"boa-dev", name:"boa") {
-    pullRequest(number:$pr_number) {
-      labels(first: 10) {
-        edges {
-          node {
+query {{
+  repository(owner:"{owner}", name:"{repo}") {{
+    pullRequest(number:{pr_number}) {{
+      labels(first: 10) {{
+        edges {{
+          node {{
             name
-          }
-        }
-      }
-    }
-  }
-}"#,
-    )
-    .replace("$pr_number", &commit.pr_number);
+          }}
+        }}
+      }}
+    }}
+  }}
+}}"#,
+    );
     let response_object: serde_json::Value = crab
         .graphql(&query)
         .await
@@ -264,79 +280,4 @@ query {
         commit,
         kind: PRKind::Ignored,
     })
-}
-
-#[tokio::main]
-async fn main() -> Result<(), ()> {
-    // TODO: take the *owner* and *repo* as arguments and use them to read the config
-    // from main.
-    // Somehow get the date of the latest tag, instead of receiving it (currently hard-coded)
-    let token = std::env::var("GITHUB_TOKEN").expect("TODO, die gracefuly");
-    let crab = OctocrabBuilder::new()
-        .personal_token(token)
-        .build()
-        .expect("TODO, die gracefuly");
-
-    let date_last_release = "2022-06-11T00:00:00"; // TODO: should get date of last release magically
-    eprintln!("Fetching all commits since last release");
-    let commits = get_commits(date_last_release, &crab).await?;
-    eprintln!("commits:      {:3}", commits.len());
-
-    let mut futs: FuturesUnordered<_> = commits
-        .into_iter()
-        // TODO: make this configurable
-        // disregard commits by dependabot
-        .filter(|com| !com.author.contains("dependabot"))
-        .map(|commit| pr_from_commit(commit, &crab))
-        .collect();
-    eprintln!("user commits: {:3}", futs.len());
-
-    let mut features = BinaryHeap::new();
-    let mut fixes = BinaryHeap::new();
-    let mut improvements = BinaryHeap::new();
-    let mut ignored = BinaryHeap::new();
-    while let Some(re) = futs.next().await {
-        // put PR in appropriate list
-        if let Ok(pr) = re {
-            match pr.kind {
-                PRKind::Feature => {
-                    features.push(pr);
-                }
-                PRKind::BugFix => {
-                    fixes.push(pr);
-                }
-                PRKind::Internal => {
-                    improvements.push(pr);
-                }
-                PRKind::Ignored => {
-                    ignored.push(pr);
-                }
-            }
-        }
-    }
-    eprintln!("features:     {:3}", features.len());
-    eprintln!("fixes:        {:3}", fixes.len());
-    eprintln!("improvements: {:3}", improvements.len());
-    eprintln!("ignored:      {:3}", ignored.len());
-
-    println!("### Feature Enhancements");
-    println!();
-    for feat in features.into_sorted_vec().iter() {
-        println!("- {}", feat.commit);
-    }
-    println!();
-
-    println!("### Bug Fixes");
-    println!();
-    for fix in fixes.into_sorted_vec().iter() {
-        println!("- {}", fix.commit);
-    }
-    println!();
-
-    println!("### Internal Improvements");
-    println!();
-    for improvement in improvements.into_sorted_vec().iter() {
-        println!("- {}", improvement.commit);
-    }
-    Ok(())
 }
