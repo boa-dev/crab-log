@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, BinaryHeap};
 use std::fmt::Display;
 
 use chrono::{DateTime, Duration, FixedOffset, Utc};
@@ -96,6 +96,36 @@ impl Config {
             date,
         })
     }
+
+    pub async fn get_date_last_release(&self, crab: &Octocrab) -> Result<String, ()> {
+        let owner = &self.owner;
+        let repo = &self.repo;
+        let query = format!(
+            r#"
+query {{
+  repository(owner:"{owner}", name:"{repo}") {{
+    latestRelease {{
+      tagCommit {{
+        committedDate
+      }}
+    }}
+  }}
+}}
+            "#,
+        );
+        let response_object: Value = crab
+            .graphql(&query)
+            .await
+            .expect("fetching last release failed");
+        response_object.get("data")
+            .and_then(|obj| obj.get("repository"))
+            .and_then(|obj| obj.get("latestRelease"))
+            .and_then(|obj| obj.get("tagCommit"))
+            .and_then(|obj| obj.get("committedDate"))
+            .and_then(Value::as_str)
+            .map(Into::into)
+            .ok_or(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -154,7 +184,7 @@ pub async fn get_commits<'c>(
         let response_object: Value = crab
             .graphql(&query)
             .await
-            .expect("TODO, should handle this");
+            .expect("fetching commits failed");
         let vec = response_object
             .get("data")
             .and_then(|obj| obj.get("repository"))
@@ -254,7 +284,7 @@ query {{
     let response_object: serde_json::Value = crab
         .graphql(&query)
         .await
-        .expect("TODO, should handle this");
+        .expect("fetching labels failed");
     let label_array = response_object
         .get("data")
         .and_then(|obj| obj.get("repository"))
@@ -280,4 +310,14 @@ query {{
         commit,
         kind: PRKind::Ignored,
     })
+}
+
+pub fn eprint_ignored(ignored: &BinaryHeap<PR>) {
+    eprintln!("-- ignored commits --");
+    for pr in ignored {
+        let author = &pr.commit.author;
+        let number = &pr.commit.pr_number;
+        let message = &pr.commit.message;
+        eprintln!("#{number} @{author}: {message}");
+    }
 }

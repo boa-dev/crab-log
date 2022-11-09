@@ -5,7 +5,7 @@ use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt;
 use octocrab::OctocrabBuilder;
 
-use crab_log::{get_commits, pr_from_commit, Config, PRKind};
+use crab_log::{eprint_ignored, get_commits, pr_from_commit, Config, PRKind};
 
 #[tokio::main]
 async fn main() -> Result<(), ()> {
@@ -16,18 +16,19 @@ async fn main() -> Result<(), ()> {
     let crab = OctocrabBuilder::new()
         .personal_token(token)
         .build()
-        .expect("TODO, die gracefuly");
+        .expect("initialization failed");
 
-    let date_last_release = "2022-06-11T00:00:00"; // TODO: should get date of last release magically
-    eprintln!("Fetching all commits since last release");
-    let commits = get_commits(&config, date_last_release, &crab).await?;
+    eprintln!("Identifying date of last release");
+    let date_last_release = config.get_date_last_release(&crab).await?;
+    eprintln!("Fetching all commits since {date_last_release}");
+    let commits = get_commits(&config, &date_last_release, &crab).await?;
     eprintln!("commits:      {:3}", commits.len());
 
     let mut futs: FuturesUnordered<_> = commits
         .into_iter()
         // TODO: make this configurable
-        // disregard commits by dependabot
-        .filter(|com| !com.author.contains("dependabot"))
+        // disregard commits by bots
+        .filter(|com| !com.author.contains("[bot]"))
         .map(|commit| pr_from_commit(commit, &crab))
         .collect();
     eprintln!("user commits: {:3}", futs.len());
@@ -59,6 +60,8 @@ async fn main() -> Result<(), ()> {
     eprintln!("fixes:        {:3}", fixes.len());
     eprintln!("improvements: {:3}", improvements.len());
     eprintln!("ignored:      {:3}", ignored.len());
+
+    eprint_ignored(&ignored);
 
     println!("### Feature Enhancements");
     println!();
